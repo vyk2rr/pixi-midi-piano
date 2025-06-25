@@ -146,14 +146,14 @@ import * as Tone from "tone";
 
   // MIDI + Tone.js
   async function setupMidiAndTone() {
-    // Inicializa Tone.js (necesario para que suene en navegadores modernos)
     await Tone.start();
 
-    // Crea un sintetizador simple
-    const synth = new Tone.Synth().toDestination();
-    let currentPitchBend = 0; // Guarda el valor actual de pitch bend
+    // Usa PolySynth para acordes y varias notas a la vez
+    const synth = new Tone.PolySynth(Tone.Synth).toDestination();
+    const distortion = new Tone.Distortion(0).toDestination();
+    synth.connect(distortion);
+    let currentPitchBend = 0;
 
-    // Solicita acceso a MIDI
     if (navigator.requestMIDIAccess) {
       navigator.requestMIDIAccess().then((midiAccess) => {
         for (const input of midiAccess.inputs.values()) {
@@ -162,21 +162,16 @@ import * as Tone from "tone";
 
             // PITCH BEND
             if (status === 224) {
-              // data1 = LSB, data2 = MSB
-              const value = (data2 << 7) | data1; // 14 bits
-              // MIDI pitch bend va de 0 (min) a 8192 (center) a 16383 (max)
-              // Normaliza a rango -1 a 1
+              const value = (data2 << 7) | data1;
               const bend = (value - 8192) / 8192;
               currentPitchBend = bend;
-              // Detune en cents: +/- 2 semitonos (200 cents) es típico
-              synth.detune.value = bend * 200;
+              synth.set({ detune: bend * 200 });
             }
 
             // NOTE ON
             if (status === 144 && data2 > 0) {
               const noteName = Tone.Frequency(data1, "midi").toNote();
               synth.triggerAttack(noteName);
-              // Resalta la tecla visual
               const key = midiNoteToKey[data1];
               if (key && typeof key.draw === "function") {
                 // @ts-ignore
@@ -188,7 +183,8 @@ import * as Tone from "tone";
 
             // NOTE OFF
             if ((status === 128) || (status === 144 && data2 === 0)) {
-              synth.triggerRelease();
+              const noteName = Tone.Frequency(data1, "midi").toNote();
+              synth.triggerRelease(noteName);
               const key = midiNoteToKey[data1];
               if (key && typeof key.draw === "function") {
                 // @ts-ignore
@@ -196,6 +192,14 @@ import * as Tone from "tone";
                 // @ts-ignore
                 key.isActive = false;
               }
+            }
+
+            // CONTROL CHANGE (Mod Wheel)
+            if (status === 176 && data1 === 1) {
+              const modValue = data2 / 127;
+              // Ejemplo: controla volumen, distorsión y puedes agregar más
+              synth.volume.value = -12 + modValue * 12; // de -12dB a 0dB
+              distortion.distortion = modValue; // 0 a 1
             }
           };
         }
