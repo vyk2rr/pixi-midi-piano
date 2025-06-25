@@ -1,5 +1,23 @@
-import { Application, Graphics, Container } from "pixi.js";
+import { Application, Graphics, Container, Text } from "pixi.js";
 import * as Tone from "tone";
+import createDefaultSynth, { SupportedSynthType } from "./createDefaultSynth";
+
+// --- BEAT Y MIDI BPM CONTROL ---
+let midiAccess: WebMidi.MIDIAccess;
+let loop: Tone.Loop;
+
+// BPM range controlado por la perilla "mode"
+const minBPM = 60;
+const maxBPM = 180;
+
+// Crear beat
+const kick = new Tone.MembraneSynth().toDestination();
+loop = new Tone.Loop(
+  (time) => {
+    kick.triggerAttackRelease("C1", "8n", time);
+  },
+  "4n"
+);
 
 (async () => {
   // Crear la aplicación
@@ -144,72 +162,108 @@ import * as Tone from "tone";
 
   app.stage.addChild(piano);
 
-  // MIDI + Tone.js
+  // MIDI + Tone.js + Beat
   async function setupMidiAndTone() {
     await Tone.start();
 
-    // Usa PolySynth para acordes y varias notas a la vez
-    const synth = new Tone.PolySynth(Tone.Synth).toDestination();
+    // --- SINTETIZADOR Y EFECTOS ---
+    const synth: SupportedSynthType = createDefaultSynth();
     const distortion = new Tone.Distortion(0).toDestination();
     synth.connect(distortion);
     let currentPitchBend = 0;
 
-    if (navigator.requestMIDIAccess) {
-      navigator.requestMIDIAccess().then((midiAccess) => {
-        for (const input of midiAccess.inputs.values()) {
-          input.onmidimessage = (msg) => {
-            const [status, data1, data2] = msg.data;
+    // --- MIDI ---
+    try {
+      midiAccess = await navigator.requestMIDIAccess();
 
-            // PITCH BEND
-            if (status === 224) {
-              const value = (data2 << 7) | data1;
-              const bend = (value - 8192) / 8192;
-              currentPitchBend = bend;
-              synth.set({ detune: bend * 200 });
-            }
+      const inputs = Array.from(midiAccess.inputs.values());
+      const input = inputs[0];
+      if (!input) {
+        console.warn("No MIDI input found");
+        return;
+      }
 
-            // NOTE ON
-            if (status === 144 && data2 > 0) {
-              const noteName = Tone.Frequency(data1, "midi").toNote();
-              synth.triggerAttack(noteName);
-              const key = midiNoteToKey[data1];
-              if (key && typeof key.draw === "function") {
-                // @ts-ignore
-                key.draw(0xffeb3b);
-                // @ts-ignore
-                key.isActive = true;
-              }
-            }
+      input.onmidimessage = (msg) => {
+        const [status, data1, data2] = msg.data;
 
-            // NOTE OFF
-            if ((status === 128) || (status === 144 && data2 === 0)) {
-              const noteName = Tone.Frequency(data1, "midi").toNote();
-              synth.triggerRelease(noteName);
-              const key = midiNoteToKey[data1];
-              if (key && typeof key.draw === "function") {
-                // @ts-ignore
-                key.draw(key.baseColor);
-                // @ts-ignore
-                key.isActive = false;
-              }
-            }
+        // Log de todos los mensajes MIDI
+        console.log(
+          `MIDI Message: status=${status}, data1=${data1}, data2=${data2}`
+        );
 
-            // CONTROL CHANGE (Mod Wheel)
-            if (status === 176 && data1 === 1) {
-              const modValue = data2 / 127;
-              // Ejemplo: controla volumen, distorsión y puedes agregar más
-              synth.volume.value = -12 + modValue * 12; // de -12dB a 0dB
-              distortion.distortion = modValue; // 0 a 1
-            }
-          };
+        // PITCH BEND
+        if (status === 224) {
+          const value = (data2 << 7) | data1;
+          const bend = (value - 8192) / 8192;
+          currentPitchBend = bend;
+          synth.set({ detune: bend * 200 });
         }
-      });
-    } else {
-      console.warn("Web MIDI API no soportada en este navegador.");
+
+        // NOTE ON
+        if (status === 144 && data2 > 0) {
+          const noteName = Tone.Frequency(data1, "midi").toNote();
+          synth.triggerAttack(noteName);
+          const key = midiNoteToKey[data1];
+          if (key && typeof key.draw === "function") {
+            // @ts-ignore
+            key.draw(0xffeb3b);
+            // @ts-ignore
+            key.isActive = true;
+          }
+        }
+
+        // NOTE OFF
+        if ((status === 128) || (status === 144 && data2 === 0)) {
+          const noteName = Tone.Frequency(data1, "midi").toNote();
+          synth.triggerRelease(noteName);
+          const key = midiNoteToKey[data1];
+          if (key && typeof key.draw === "function") {
+            // @ts-ignore
+            key.draw(key.baseColor);
+            // @ts-ignore
+            key.isActive = false;
+          }
+        }
+
+        // CONTROL CHANGE (Mod Wheel)
+        if (status === 176 && data1 === 1) {
+          const modValue = data2 / 127;
+          synth.volume.value = -12 + modValue * 12; // de -12dB a 0dB
+          distortion.distortion = modValue; // 0 a 1
+        }
+
+        // CONTROL CHANGE (Knob físico CC 20) para BPM del beat
+        if (status === 176 && data1 === 20) {
+          const knobValue = data2 / 127;
+          const bpm = minBPM + knobValue * (maxBPM - minBPM);
+          Tone.getTransport().bpm.value = bpm;
+          bpmValue = bpm; // actualiza el valor global para el texto
+
+          // Calcula el ángulo correspondiente al valor de la perilla
+          const angle = bpmToAngle(bpm);
+          drawKnob(angle);
+
+          console.log(
+            `%c[KNOB MODE] CC20 value: ${data2} → BPM: ${bpm.toFixed(1)}`,
+            "color: orange; font-weight: bold"
+          );
+        }
+      };
+    } catch (err) {
+      console.error("MIDI error", err);
     }
+
+    // Iniciar transporte y loop
+    Tone.getTransport().start();
+    loop.start(0);
   }
 
-  // Crea el botón si no existe
+  // Ejecuta setupMidiAndTone automáticamente al cargar
+  window.addEventListener("DOMContentLoaded", () => {
+    setupMidiAndTone();
+  });
+
+  // Si quieres que funcione también con el botón, puedes dejarlo:
   let audioBtn = document.getElementById("audio-btn");
   if (!audioBtn) {
     audioBtn = document.createElement("button");
@@ -224,6 +278,88 @@ import * as Tone from "tone";
 
   audioBtn.addEventListener("click", async () => {
     await setupMidiAndTone();
-    audioBtn.remove(); // Quita el botón tras activar audio
+    audioBtn.remove();
+  });
+
+  // --- KNOB VISUAL PARA BPM ---
+  const knobRadius = 40;
+  const knobX = app.screen.width / 2 - knobRadius;
+  const knobY = piano.y + whiteKeyHeight + 30;
+
+  let bpmValue = 120; // valor inicial
+  const bpmMin = minBPM;
+  const bpmMax = maxBPM;
+
+  const knob = new Graphics();
+  const bpmText = new Text(`${Math.round(bpmValue)} BPM`, {
+    fill: 0x222222,
+    fontSize: 18,
+    fontFamily: "monospace",
+    align: "center"
+  });
+  bpmText.anchor.set(0.5, 0); // centra el texto horizontalmente
+
+  function drawKnob(angle: number) {
+    knob.clear();
+    // Círculo base
+    knob.circle(knobRadius, knobRadius, knobRadius);
+    knob.fill({ color: 0xeeeeee });
+    knob.stroke({ color: 0x888888, width: 3 });
+
+    // Indicador
+    const indicatorLength = knobRadius * 0.8;
+    const cx = knobRadius;
+    const cy = knobRadius;
+    const indX = cx + indicatorLength * Math.cos(angle - Math.PI / 2);
+    const indY = cy + indicatorLength * Math.sin(angle - Math.PI / 2);
+    knob.moveTo(cx, cy);
+    knob.lineTo(indX, indY);
+    knob.stroke({ color: 0x333399, width: 5 });
+
+    // Actualiza texto BPM
+    bpmText.text = `${Math.round(bpmValue)} BPM`;
+    bpmText.x = knob.x + knobRadius;
+    bpmText.y = knob.y + knobRadius * 2 + 10;
+  }
+
+  function bpmToAngle(bpm: number) {
+    return ((bpm - bpmMin) / (bpmMax - bpmMin)) * (Math.PI * 1.5) - Math.PI * 0.75;
+  }
+  function angleToBpm(angle: number) {
+    let norm = (angle + Math.PI * 0.75) / (Math.PI * 1.5);
+    norm = Math.max(0, Math.min(1, norm));
+    return bpmMin + norm * (bpmMax - bpmMin);
+  }
+
+  // Inicializa knob y texto
+  knob.x = knobX;
+  knob.y = knobY;
+  knob.eventMode = "static";
+  knob.cursor = "pointer";
+  app.stage.addChild(knob);
+  app.stage.addChild(bpmText);
+  drawKnob(bpmToAngle(bpmValue));
+
+  // Interacción drag para el knob
+  let dragging = false;
+  knob.on("pointerdown", () => {
+    dragging = true;
+  });
+  app.stage.on("pointerup", () => {
+    dragging = false;
+  });
+  app.stage.on("pointerupoutside", () => {
+    dragging = false;
+  });
+  app.stage.on("pointermove", (e) => {
+    if (!dragging) return;
+    const local = e.global.clone();
+    local.x -= knob.x + knobRadius;
+    local.y -= knob.y + knobRadius;
+    const angle = Math.atan2(local.y, local.x) + Math.PI / 2;
+    const limited = Math.max(-Math.PI * 0.75, Math.min(Math.PI * 0.75, angle));
+    bpmValue = angleToBpm(limited);
+    drawKnob(limited);
+    Tone.getTransport().bpm.value = bpmValue;
   });
 })();
