@@ -3,6 +3,10 @@
 A minimal interactive piano built with PixiJS and Tone.js.
 It receives MIDI input (or clicks), processes it, and plays sound.
 
+<img width="1093" alt="image" src="https://github.com/user-attachments/assets/e0db346b-13f5-421c-b027-be67413ba222" />
+
+<img width="1150" alt="image" src="https://github.com/user-attachments/assets/7e992258-5b58-4e0b-8a6f-88a5312eaf8c" />
+
 ### Why PixiJS?
 After struggling with React re-renders for 15 days, I rebuilt the same logic in PixiJS in under 30 minutes.
 The result:
