@@ -1,42 +1,42 @@
 import * as Tone from "tone";
+
 export type SupportedSynthType = Tone.PolySynth;
 
 export default function createDefaultSynth(): SupportedSynthType {
+  // PolySynth con un sonido más profundo y resonante, simulando una sitara
   const synth = new Tone.PolySynth(Tone.Synth, {
-    volume: -8,
+    oscillator: { type: "triangle" },
     envelope: {
-      attack: 0.002,
-      decay: 0.5,
-      sustain: 0.15,
-      release: 1.5
-    },
-    oscillator: {
-      type: "sine"
+      attack: 0.005,
+      decay: 0.3,
+      sustain: 0.05,
+      release: 2 // liberación larga para alargar la resonancia
     }
   });
 
+  // Filtrado semi-oriental para resaltar armónicos tipo sitar
   const filter = new Tone.Filter({
-    type: "lowpass",
-    frequency: 5000,
-    Q: 1
+    type: "bandpass",
+    frequency: 1200,
+    Q: 1.5
   });
 
-  const compressor = new Tone.Compressor({
-    threshold: -20,
-    ratio: 3,
-    attack: 0.003,
-    release: 0.25
+  // Efecto de retroalimentación para prolongar el final de las notas
+  const delay = new Tone.FeedbackDelay({
+    delayTime: 0.06,
+    feedback: 0.38,
+    wet: 0.3
   });
 
+  // Reverb con mayor decaimiento, simulando caja de resonancia
   const reverb = new Tone.Reverb({
-    decay: 1.5,
-    wet: 0.2
-  }).toDestination();
+    decay: 4,
+    wet: 0.3
+  });
 
-  // Conecta la cadena de efectos
-  synth.chain(filter, compressor, reverb);
+  // Conecta los efectos en cadena
+  synth.chain(filter, delay, reverb, Tone.Destination);
 
-  // Retorna el PolySynth real, que sí tiene .toDestination()
   return synth;
 }
 

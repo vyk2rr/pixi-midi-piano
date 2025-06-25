@@ -6,18 +6,41 @@ import createDefaultSynth, { SupportedSynthType } from "./createDefaultSynth";
 let midiAccess: WebMidi.MIDIAccess;
 let loop: Tone.Loop;
 
-// BPM range controlado por la perilla "mode"
-const minBPM = 60;
-const maxBPM = 180;
+const minBPM = 30;
+const maxBPM = 300;
+const initialBPM = 30;
 
-// Crear beat
-const kick = new Tone.MembraneSynth().toDestination();
-loop = new Tone.Loop(
-  (time) => {
-    kick.triggerAttackRelease("C1", "8n", time);
-  },
-  "4n"
-);
+// Tabla grave (bayan)
+const tablaBayan = new Tone.MembraneSynth({
+  pitchDecay: 0.04,
+  octaves: 2,
+  oscillator: { type: "sine" },
+  envelope: { attack: 0.001, decay: 0.25, sustain: 0, release: 0.1 }
+}).toDestination();
+
+// Tabla agudo (dayan)
+const tablaDayan = new Tone.MetalSynth({
+  frequency: 200,
+  envelope: { attack: 0.001, decay: 0.12, release: 0.01 },
+  harmonicity: 5.1,
+  modulationIndex: 32,
+  resonance: 4000,
+  octaves: 1.5
+}).toDestination();
+
+// Sintetizador para "Tin" en Teen Taal
+const tablaTin = new Tone.Synth({
+  oscillator: { type: "triangle" },
+  envelope: { attack: 0.01, decay: 0.05, sustain: 0, release: 0.15 }
+}).toDestination();
+
+// Slap de tabla
+const tablaSlap = new Tone.MembraneSynth({
+  pitchDecay: 0.008,
+  octaves: 2,
+  oscillator: { type: "sine" },
+  envelope: { attack: 0.001, decay: 0.08, sustain: 0, release: 0.02 }
+}).toDestination();
 
 (async () => {
   // Crear la aplicación
@@ -30,14 +53,12 @@ loop = new Tone.Loop(
   const whiteNotes = ["C", "D", "E", "F", "G", "A", "B"];
   const blackNotes = ["C#", "D#", "", "F#", "G#", "A#", ""];
 
-  // Calcula el ancho de cada tecla para ocupar todo el width
   const totalWhiteKeys = octaves * whiteNotes.length;
   const whiteKeyWidth = app.screen.width / totalWhiteKeys;
-  const whiteKeyHeight = whiteKeyWidth * 4.2; // Relación de aspecto piano clásico
+  const whiteKeyHeight = whiteKeyWidth * 4.2;
   const blackKeyWidth = whiteKeyWidth * 0.6;
   const blackKeyHeight = whiteKeyHeight * 0.6;
 
-  // Piano alineado arriba a la izquierda
   const pianoOffsetX = 0;
   const pianoOffsetY = 0;
 
@@ -159,10 +180,67 @@ loop = new Tone.Loop(
 
   piano.x = pianoOffsetX;
   piano.y = pianoOffsetY;
-
   app.stage.addChild(piano);
 
-  // MIDI + Tone.js + Beat
+  // --- TEEN TAAL VISUAL ---
+  const teenTaalSyllables = [
+    "Dha", "Dhin", "Dhin", "Dha",
+    "Dha", "Dhin", "Dhin", "Dha",
+    "Dha", "Tin",  "Tin",  "Ta",
+    "Ta",  "Dhin", "Dhin", "Dha"
+  ];
+
+  const syllableContainer = new Container();
+  const syllableTexts: Text[] = [];
+  const syllableFontSize = 48;
+  const syllableSpacingX = 130;
+  const syllableSpacingY = 60;
+  const syllablesPerRow = 4;
+
+  for (let i = 0; i < teenTaalSyllables.length; i++) {
+    const txt = new Text(teenTaalSyllables[i], {
+      fontFamily: "monospace",
+      fontSize: syllableFontSize,
+      fill: 0x000000,
+      fontWeight: "bold"
+    });
+    txt.anchor.set(0.5, 0); // centra horizontalmente
+    // Calcula posición en 4 filas de 4 columnas
+    const row = Math.floor(i / syllablesPerRow);
+    const col = i % syllablesPerRow;
+    txt.x = col * syllableSpacingX + syllableSpacingX / 2;
+    txt.y = row * syllableSpacingY;
+    syllableContainer.addChild(txt);
+    syllableTexts.push(txt);
+  }
+
+  // Centra el container debajo del piano
+  syllableContainer.x = (app.screen.width - syllablesPerRow * syllableSpacingX) / 2;
+  syllableContainer.y = piano.y + whiteKeyHeight + 160;
+  app.stage.addChild(syllableContainer);
+
+  // --- TEEN TAAL LOOP ---
+  const teenTaalLength = 16;
+  let teenStep = 0;
+  loop = new Tone.Loop((time) => {
+    const syllable = teenTaalSyllables[teenStep];
+    triggerTablaSyllable(syllable, time);
+
+    // VISUAL: todas las sílabas en negro, solo la activa en amarillo
+    for (let i = 0; i < syllableTexts.length; i++) {
+      syllableTexts[i].visible = true; // Siempre visibles
+      if (i === teenStep) {
+        syllableTexts[i].style.fill = 0xffeb3b; // Amarillo para la activa
+      } else {
+        syllableTexts[i].style.fill = 0x000000; // Negro para las inactivas
+      }
+      syllableTexts[i].style.fontSize = 48;
+    }
+
+    teenStep = (teenStep + 1) % teenTaalLength;
+  }, "16n");
+
+  // --- MIDI + Tone.js + Beat ---
   async function setupMidiAndTone() {
     await Tone.start();
 
@@ -248,14 +326,38 @@ loop = new Tone.Loop(
             "color: orange; font-weight: bold"
           );
         }
+
+        // NOTE ON (velocidad > 0) para trigger de sílabas
+        if (status === 137 && data2 > 0) {
+          // Normaliza la fuerza [0..127] a [0..1]
+          const velocity = data2 / 127;
+
+          switch (data1) {
+            case 40:
+              triggerTablaSyllable("Dha", Tone.now(), velocity);
+              break;
+            case 41:
+              triggerTablaSyllable("Dhin", Tone.now(), velocity);
+              break;
+            case 42:
+              triggerTablaSyllable("Tin", Tone.now(), velocity);
+              break;
+            case 43:
+              triggerTablaSyllable("Ta", Tone.now(), velocity);
+              break;
+            default:
+              break;
+          }
+        }
       };
     } catch (err) {
       console.error("MIDI error", err);
     }
 
     // Iniciar transporte y loop
+    Tone.getTransport().bpm.value = initialBPM;
     Tone.getTransport().start();
-    loop.start(0);
+    // loop.start(0);
   }
 
   // Ejecuta setupMidiAndTone automáticamente al cargar
@@ -286,7 +388,7 @@ loop = new Tone.Loop(
   const knobX = app.screen.width / 2 - knobRadius;
   const knobY = piano.y + whiteKeyHeight + 30;
 
-  let bpmValue = 120; // valor inicial
+  let bpmValue = initialBPM; // valor inicial
   const bpmMin = minBPM;
   const bpmMax = maxBPM;
 
@@ -362,4 +464,37 @@ loop = new Tone.Loop(
     drawKnob(limited);
     Tone.getTransport().bpm.value = bpmValue;
   });
+
+  // Crea un botón para disparar el Teen Taal manualmente
+  const teenTaalBtn = document.createElement("button");
+  teenTaalBtn.textContent = "Play Teen Taal";
+  teenTaalBtn.style.position = "absolute";
+  teenTaalBtn.style.top = "250px";
+  teenTaalBtn.style.left = "10px";
+  teenTaalBtn.style.zIndex = "1000";
+  document.body.appendChild(teenTaalBtn);
+
+  teenTaalBtn.addEventListener("click", () => {
+    loop.start(0);
+  });
+
+  function triggerTablaSyllable(syllable: string, time: number, velocity = 1) {
+    switch (syllable) {
+      case "Dha":
+        tablaBayan.triggerAttackRelease("A1", "4n", time, velocity);
+        tablaDayan.triggerAttackRelease("16n", time, velocity * 0.7);
+        break;
+      case "Dhin":
+        tablaBayan.triggerAttackRelease("C2", "8n", time, velocity);
+        break;
+      case "Tin":
+        tablaDayan.triggerAttackRelease("F#5", "16n", time, velocity * 0.5);
+        break;
+      case "Ta":
+        tablaDayan.triggerAttackRelease("D#5", "8n", time, velocity * 0.4);
+        break;
+      default:
+        break;
+    }
+  }
 })();
