@@ -151,65 +151,50 @@ import * as Tone from "tone";
 
     // Crea un sintetizador simple
     const synth = new Tone.Synth().toDestination();
+    let currentPitchBend = 0; // Guarda el valor actual de pitch bend
 
     // Solicita acceso a MIDI
     if (navigator.requestMIDIAccess) {
       navigator.requestMIDIAccess().then((midiAccess) => {
         for (const input of midiAccess.inputs.values()) {
           input.onmidimessage = (msg) => {
-            const [status, note, velocity] = msg.data;
-            // Nota ON
-            if (status === 144 && velocity > 0) {
-              const noteName = Tone.Frequency(note, "midi").toNote();
-              synth.triggerAttack(noteName);
+            const [status, data1, data2] = msg.data;
 
+            // PITCH BEND
+            if (status === 224) {
+              // data1 = LSB, data2 = MSB
+              const value = (data2 << 7) | data1; // 14 bits
+              // MIDI pitch bend va de 0 (min) a 8192 (center) a 16383 (max)
+              // Normaliza a rango -1 a 1
+              const bend = (value - 8192) / 8192;
+              currentPitchBend = bend;
+              // Detune en cents: +/- 2 semitonos (200 cents) es típico
+              synth.detune.value = bend * 200;
+            }
+
+            // NOTE ON
+            if (status === 144 && data2 > 0) {
+              const noteName = Tone.Frequency(data1, "midi").toNote();
+              synth.triggerAttack(noteName);
               // Resalta la tecla visual
-              const key = midiNoteToKey[note];
-              if (key) {
-                // Usa la función draw del helper para mantener consistencia
+              const key = midiNoteToKey[data1];
+              if (key && typeof key.draw === "function") {
                 // @ts-ignore
-                if (typeof key.draw === "function") {
-                  // @ts-ignore
-                  key.draw(0xffeb3b); // Amarillo
-                  // Marca como activa para evitar que el mouse la sobrescriba
-                  // @ts-ignore
-                  key.isActive = true;
-                } else {
-                  // Fallback por si no existe draw (no debería pasar)
-                  key.clear();
-                  if (key.height === whiteKeyHeight) {
-                    key.rect(0, 0, whiteKeyWidth, whiteKeyHeight);
-                    key.fill({ color: 0xffeb3b });
-                    key.stroke({ color: 0x000000, width: 2 });
-                  } else {
-                    key.rect(0, 0, blackKeyWidth, blackKeyHeight);
-                    key.fill({ color: 0xffeb3b });
-                  }
-                }
+                key.draw(0xffeb3b);
+                // @ts-ignore
+                key.isActive = true;
               }
             }
-            // Nota OFF
-            if ((status === 128) || (status === 144 && velocity === 0)) {
+
+            // NOTE OFF
+            if ((status === 128) || (status === 144 && data2 === 0)) {
               synth.triggerRelease();
-              const key = midiNoteToKey[note];
-              if (key) {
+              const key = midiNoteToKey[data1];
+              if (key && typeof key.draw === "function") {
                 // @ts-ignore
-                if (typeof key.draw === "function") {
-                  // @ts-ignore
-                  key.draw(key.baseColor); // Restaura color base
-                  // @ts-ignore
-                  key.isActive = false;
-                } else {
-                  key.clear();
-                  if (key.height === whiteKeyHeight) {
-                    key.rect(0, 0, whiteKeyWidth, whiteKeyHeight);
-                    key.fill({ color: 0xffffff });
-                    key.stroke({ color: 0x000000, width: 2 });
-                  } else {
-                    key.rect(0, 0, blackKeyWidth, blackKeyHeight);
-                    key.fill({ color: 0x000000 });
-                  }
-                }
+                key.draw(key.baseColor);
+                // @ts-ignore
+                key.isActive = false;
               }
             }
           };
@@ -220,5 +205,21 @@ import * as Tone from "tone";
     }
   }
 
-  setupMidiAndTone();
+  // Crea el botón si no existe
+  let audioBtn = document.getElementById("audio-btn");
+  if (!audioBtn) {
+    audioBtn = document.createElement("button");
+    audioBtn.id = "audio-btn";
+    audioBtn.textContent = "Activar audio y MIDI";
+    audioBtn.style.position = "absolute";
+    audioBtn.style.top = "10px";
+    audioBtn.style.left = "10px";
+    audioBtn.style.zIndex = "1000";
+    document.body.appendChild(audioBtn);
+  }
+
+  audioBtn.addEventListener("click", async () => {
+    await setupMidiAndTone();
+    audioBtn.remove(); // Quita el botón tras activar audio
+  });
 })();
